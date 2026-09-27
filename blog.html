@@ -22,12 +22,12 @@
       <div class="post-meta">
         <span class="meta-author">By Raz</span>
         <span class="meta-divider" aria-hidden="true">•</span>
-        <span class="meta-date">September 27, 2026</span>
+        <time class="meta-date" datetime="2026-09-27">September 27, 2026</time>
         <span class="meta-divider" aria-hidden="true">•</span>
         <span class="meta-readtime">5 min read</span>
       </div>
 
-      <img src="sample.jpg" class="featured-image" width="1376" height="768" alt="Laptop showing code on a wooden desk by a window, with a cup of coffee, a potted plant and an open notebook">
+      <img src="sample.jpg" srcset="sample-768.jpg 768w, sample.jpg 1376w" sizes="(max-width: 600px) calc(100vw - 64px), 684px" class="featured-image" width="1376" height="768" alt="Laptop showing code on a wooden desk by a window, with a cup of coffee, a potted plant and an open notebook">
 
       <div class="post-content">
         <p class="lead">
@@ -57,11 +57,11 @@
       </div>
 
       <footer class="blog-footer">
-        <div class="footer-tags">
-          <span class="tag">#WebDev</span>
-          <span class="tag">#Architecture</span>
-          <span class="tag">#Design</span>
-        </div>
+        <ul class="footer-tags" aria-label="Tags">
+          <li class="tag">#WebDev</li>
+          <li class="tag">#Architecture</li>
+          <li class="tag">#Design</li>
+        </ul>
         <a href="index.html" class="footer-home-link"><span aria-hidden="true">←</span> Return to Home</a>
       </footer>
     </article>

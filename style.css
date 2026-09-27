@@ -42,7 +42,7 @@ p {
 }
 
 .blog-link:hover {
-  background-color: #0077ed;
+  background-color: #005bb5;
 }
 
 @media (prefers-color-scheme: dark) {
