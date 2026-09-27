@@ -15,8 +15,10 @@
 
 .blog-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 8px 16px;
   margin-bottom: 24px;
 }
 
@@ -163,6 +165,19 @@
 
   .post-title, .post-content h2 {
     color: #f1f5f9;
+  }
+
+  .nav-back, .footer-home-link {
+    color: #60a5fa;
+  }
+
+  .post-meta {
+    color: #94a3b8;
+  }
+
+  .blog-tag {
+    background: #334155;
+    color: #cbd5e1;
   }
 
   .post-content {
