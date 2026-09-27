@@ -29,6 +29,22 @@ p {
   font-style: italic;
 }
 
+.blog-link {
+  display: inline-block;
+  margin-top: 1rem;
+  padding: 10px 20px;
+  background-color: #0071e3;
+  color: #ffffff;
+  border-radius: 980px;
+  text-decoration: none;
+  font-weight: 500;
+  transition: background-color 0.2s ease;
+}
+
+.blog-link:hover {
+  background-color: #005bb5;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     background: #1d1d1f;
