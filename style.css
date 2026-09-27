@@ -24,6 +24,11 @@ p {
   color: #555;
 }
 
+.creator {
+  font-size: 1rem;
+  font-style: italic;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     background: #1d1d1f;
