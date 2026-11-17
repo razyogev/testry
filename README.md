@@ -20,3 +20,4 @@ GitHub Actions workflows in `.github/workflows/`:
 - **Claude PR Review** (`claude-review.yml`) — posts an automated review on each PR. Requires a `CLAUDE_CODE_OAUTH_TOKEN` repository secret (create one with `claude setup-token`).
 - **Claude Code** (`claude.yml`) — mention `@claude` in an issue, PR comment, or review to have Claude respond. Uses the same `CLAUDE_CODE_OAUTH_TOKEN` secret.
 - **Assign Reviewer** (`assign-reviewer.yml`) — requests review from `razyogevus-rgb` on PRs opened by `razyogev`, and vice versa.
+- **Jira PR Summary**
