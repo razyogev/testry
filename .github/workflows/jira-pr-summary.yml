@@ -1,0 +1,214 @@
+name: Jira PR Summary
+
+# Posts the Gearset-generated PR summary as a comment on the Jira ticket named in
+# the head branch (testry-pipeline/<JIRA-KEY>/<slug>).
+
+on:
+  pull_request:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to post to Jira
+        required: true
+        type: string
+
+# Needed only for the workflow_dispatch path, which loads the PR through the API.
+permissions:
+  pull-requests: read
+
+jobs:
+  post-summary:
+    runs-on: ubuntu-latest
+    # `branches:` on pull_request filters the base branch, so guard on the head branch here.
+    # The regex inside the script remains the authoritative check.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'testry-pipeline/')
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            // Branch name, title and body are user-controlled: read them from the payload,
+            // never interpolate them into this script.
+            const MAX_LEN = 32000; // Jira's comment limit is 32,767
+            const isDispatch = context.eventName === 'workflow_dispatch';
+
+            // Jira problems must not block PRs/deploys: warn on automatic runs, fail on manual ones.
+            const problem = (msg) => (isDispatch ? core.setFailed(msg) : core.warning(msg));
+
+            // ---------- Markdown -> Jira wiki markup ----------
+            function toWiki(md) {
+              const stash = [];
+              const hold = (s) => '\u0000' + (stash.push(s) - 1) + '\u0000';
+              const esc = (s) => s.replace(/[{}\[\]]/g, (c) => '\\' + c);
+              let t = String(md || '').replace(/\r\n?/g, '\n').replace(/\u0000/g, '');
+
+              // 1. Code first, restored last so no other rule touches it.
+              t = t.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, c) => hold('{code}\n' + c.replace(/\n$/, '') + '\n{code}'));
+              // Gearset escapes backticks as \`
+              t = t.replace(/\\?`([^`\n]+?)\\?`/g, (_, c) => hold('{{' + c.replace(/[{}]/g, '') + '}}'));
+              t = t.replace(/\\`/g, '`');
+
+              // 2. Strip HTML comments and common raw HTML tags.
+              t = t.replace(/<!--[\s\S]*?-->/g, '');
+              t = t.replace(/<br\s*\/?>/gi, '\n');
+              t = t.replace(/<\/?(?:p|div|span|details|summary|b|i|u|strong|em|ul|ol|li|table|thead|tbody|tr|td|th|hr|center|font|sub|sup)(?:\s[^>]*)?>/gi, '');
+
+              // 3. Images and links (held so later escaping cannot alter them).
+              t = t.replace(/!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g, (_, u) => hold('!' + u + '!'));
+              t = t.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_, text, u) => hold('[' + text.replace(/[|\[\]]/g, ' ') + '|' + u + ']'));
+
+              // 4. Escape Jira macro/link characters in the remaining text.
+              t = esc(t);
+
+              // 5. Tables.
+              const lines = t.split('\n');
+              const out = [];
+              const isRow = (l) => /^\s*\|.*\|\s*$/.test(l);
+              const isSep = (l) => /^\s*\|[\s:|-]*-[\s:|-]*\|\s*$/.test(l);
+              const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim() || ' ');
+              for (let i = 0; i < lines.length; i++) {
+                const l = lines[i];
+                if (isRow(l) && !isSep(l)) {
+                  if (i + 1 < lines.length && isSep(lines[i + 1])) {
+                    out.push('||' + cells(l).join('||') + '||');
+                    i++; // drop the --- separator
+                  } else {
+                    out.push('|' + cells(l).join('|') + '|');
+                  }
+                } else {
+                  out.push(l);
+                }
+              }
+              t = out.join('\n');
+
+              // 6. Block-level: headings, rules, quotes, lists.
+              t = t.replace(/^(#{1,6})\s+(.*?)\s*#*\s*$/gm, (_, h, text) => 'h' + h.length + '. ' + text);
+              t = t.replace(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/gm, '----');
+              t = t.replace(/^>\s?/gm, 'bq. ');
+              t = t.replace(/^([ \t]*)[-*+]\s+/gm, (_, ind) => '*'.repeat(Math.floor(ind.replace(/\t/g, '  ').length / 2) + 1) + ' ');
+              t = t.replace(/^([ \t]*)\d+[.)]\s+/gm, (_, ind) => '#'.repeat(Math.floor(ind.replace(/\t/g, '  ').length / 2) + 1) + ' ');
+
+              // 7. Inline: bold (held, so single-* italics below cannot touch it), italics, strikethrough.
+              t = t.replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, (_, m, c) => hold('*' + c + '*'));
+              t = t.replace(/(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])/g, '_$1_');
+              t = t.replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '-$1-');
+
+              // 8. Restore held fragments (they can nest).
+              let prev;
+              do {
+                prev = t;
+                t = t.replace(/\u0000(\d+)\u0000/g, (_, n) => stash[Number(n)]);
+              } while (t !== prev);
+              return t;
+            }
+
+            // ---------- Resolve the PR ----------
+            let pr = context.payload.pull_request;
+            if (isDispatch) {
+              const number = parseInt(process.env.PR_NUMBER, 10);
+              if (!number) return core.setFailed('pr_number input is required');
+              ({ data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: number,
+              }));
+            }
+
+            // ---------- 1. Extract the Jira key ----------
+            const m = pr.head.ref.match(/^testry-pipeline\/([A-Z][A-Z0-9_]+-\d+)(?:\/|$)/);
+            if (!m) {
+              core.info('Head branch has no Jira key; nothing to do.');
+              return;
+            }
+            const key = m[1];
+
+            // ---------- Jira connection ----------
+            const { JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN } = process.env;
+            if (!JIRA_BASE_URL || !JIRA_USER_EMAIL || !JIRA_API_TOKEN) {
+              return problem('Jira secrets (JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN) are not all set.');
+            }
+            if (!/^https:\/\//.test(JIRA_BASE_URL)) {
+              return problem('JIRA_BASE_URL must start with https://');
+            }
+            const base = JIRA_BASE_URL.replace(/\/+$/, '');
+            const auth = 'Basic ' + Buffer.from(JIRA_USER_EMAIL + ':' + JIRA_API_TOKEN).toString('base64');
+            core.setSecret(JIRA_API_TOKEN);
+            core.setSecret(auth);
+
+            // One retry on 429 / 5xx / network errors.
+            async function jira(path, init) {
+              for (let attempt = 0; ; attempt++) {
+                try {
+                  const res = await fetch(base + path, {
+                    ...init,
+                    headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' },
+                  });
+                  if ((res.status === 429 || res.status >= 500) && attempt < 1) {
+                    const wait = Math.min(Number(res.headers.get('retry-after')) || 3, 30);
+                    await new Promise((r) => setTimeout(r, wait * 1000));
+                    continue;
+                  }
+                  return res;
+                } catch (e) {
+                  if (attempt < 1) {
+                    await new Promise((r) => setTimeout(r, 3000));
+                    continue;
+                  }
+                  return { ok: false, status: 0, text: async () => String(e.message || e) };
+                }
+              }
+            }
+            async function describe(res) {
+              let text = '';
+              try { text = await res.text(); } catch (_) { /* ignore */ }
+              try {
+                const j = JSON.parse(text);
+                text = [].concat(j.errorMessages || [], Object.values(j.errors || {})).join('; ') || text;
+              } catch (_) { /* not JSON */ }
+              return text.slice(0, 300);
+            }
+
+            // ---------- 5. Duplicate protection ----------
+            // The header contains "|<pr url>]"; matching that exact form avoids /pull/3 vs /pull/34 collisions.
+            const marker = '|' + pr.html_url + ']';
+            for (let startAt = 0; ; ) {
+              const res = await jira('/rest/api/2/issue/' + encodeURIComponent(key) + '/comment?maxResults=100&startAt=' + startAt);
+              if (!res.ok) {
+                return problem('Could not read comments of ' + key + ' (HTTP ' + res.status + '): ' + (await describe(res)));
+              }
+              const page = await res.json();
+              if ((page.comments || []).some((c) => typeof c.body === 'string' && c.body.includes(marker))) {
+                core.info('Jira ' + key + ' already has a comment for this PR; skipping.');
+                return;
+              }
+              startAt += (page.comments || []).length;
+              if (!(page.comments || []).length || startAt >= (page.total || 0)) break;
+            }
+
+            // ---------- 2-4. Build and post the comment ----------
+            const clean = (s) => String(s || '').replace(/[|\[\]{}]/g, ' ').replace(/\s+/g, ' ').trim();
+            const header =
+              'GitHub PR [#' + pr.number + ' ' + clean(pr.title) + '|' + pr.html_url + '] opened by ' +
+              clean(pr.user && pr.user.login) + ' → ' + clean(pr.base && pr.base.ref);
+            let comment = pr.body && pr.body.trim() ? header + '\n\n' + toWiki(pr.body) : header;
+
+            if (comment.length > MAX_LEN) {
+              const footer = '\n\n_Truncated, see the full summary in the [PR|' + pr.html_url + "]._";
+              comment = comment.slice(0, MAX_LEN - footer.length);
+              if ((comment.match(/\{code\}/g) || []).length % 2) comment += '\n{code}'; // close a cut code block
+              comment += footer;
+            }
+
+            const res = await jira('/rest/api/2/issue/' + encodeURIComponent(key) + '/comment', {
+              method: 'POST',
+              body: JSON.stringify({ body: comment }),
+            });
+            if (!res.ok) {
+              return problem('Posting to Jira ' + key + ' failed (HTTP ' + res.status + '): ' + (await describe(res)));
+            }
+            core.info('Posted PR #' + pr.number + ' summary to Jira ' + key + '.');
